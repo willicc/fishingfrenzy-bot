@@ -1,0 +1,6 @@
+aiohttp
+aiodns
+requests
+eth-account
+siwe
+colorama
