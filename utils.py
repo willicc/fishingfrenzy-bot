@@ -23,7 +23,7 @@ def load_tokens_from_file(filename):
         with open(filename, 'r', encoding='utf-8') as f:
             return [line.strip() for line in f if line.strip()]
     except FileNotFoundError:
-        logger(f"错误：找不到文件 {filename}", 'error')
+        logger(f"Error: File not found {filename}", 'error')
         return []
 
 def load_proxies_from_file(filename):
@@ -31,7 +31,7 @@ def load_proxies_from_file(filename):
         with open(filename, 'r', encoding='utf-8') as f:
             return [line.strip() for line in f if line.strip()]
     except FileNotFoundError:
-        logger(f"错误：找不到文件 {filename}", 'error')
+        logger(f"Error: File not found {filename}", 'error')
         return []
 
 def get_next_proxy(proxies, current_index):
@@ -42,4 +42,3 @@ def get_next_proxy(proxies, current_index):
     if 'http' not in proxy_url:
         proxy_url = f'http://{proxy_url}'
     return proxy_url, next_index
-
