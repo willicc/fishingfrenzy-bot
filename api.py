@@ -12,10 +12,10 @@ async def fetch_with_proxy(url, options, proxy):
                 response.raise_for_status()
                 return await response.json()
         except aiohttp.ClientError as e:
-            logger(f"请求 {url.split('?')[0]} 时发生网络错误: {e}", 'error')
+            logger(f"Network error occurred while requesting {url.split('?')[0]}: {e}", 'error')
             return None
         except asyncio.TimeoutError:
-            logger(f"请求 {url.split('?')[0]} 超时", 'error')
+            logger(f"Request to {url.split('?')[0]} timed out", 'error')
             return None
 
 async def get_user_info(token, proxy):
@@ -65,4 +65,3 @@ async def get_inventory(token, proxy):
     url = 'https://api.fishingfrenzy.co/v1/inventory'
     options = {'method': 'GET', 'headers': {'Authorization': f'Bearer {token}'}}
     return await fetch_with_proxy(url, options, proxy)
-
