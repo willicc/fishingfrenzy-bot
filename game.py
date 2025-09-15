@@ -38,7 +38,7 @@ async def run_game_simulation(ws, game_state):
         elapsedTime = (time.time() * 1000) - start_time
         if amountEnergy >= 1 or elapsedTime >= game_duration:
             if amountEnergy < 1:
-                logger("钓鱼成功，发送 end 数据。", 'info')
+                logger("Fishing successful, sending end payload.", 'info')
 
             endPayload = {
                 "cmd": "end", "transactionId": game_state['transactionId'],
@@ -47,7 +47,7 @@ async def run_game_simulation(ws, game_state):
                 "en": 1
             }
             await ws.send_str(json.dumps(endPayload))
-            #logger("发送 end 数据。", 'info')
+            # logger("Sent end payload.", 'info')
             break
         await asyncio.sleep(0.05)
 
@@ -67,10 +67,10 @@ async def receive_messages(ws, game_state):
                         'difficultyRate': fish_data.get('difficultyRate', 11),
                         'fs': 100, 'ns': 200,
                     }
-                    #logger(f"初始化成功，目标鱼: {game_state['fishSim']['name']}", 'info')
+                    # logger(f"Initialization successful, target fish: {game_state['fishSim']['name']}", 'info')
                     await asyncio.sleep(0.5)
                     await ws.send_str(json.dumps({"cmd": "start"}))
-                    logger("开始钓鱼", 'info')
+                    logger("Starting fishing", 'info')
                     game_state['start_signal'].set()
 
                 elif message.get('type') == 'gameState':
@@ -80,12 +80,12 @@ async def receive_messages(ws, game_state):
                             last_frame.extend([message.get('frame'), message.get('dir')])
 
                 elif message.get('type') == 'gameOver':
-                    logger(f"游戏结束: 成功: {message.get('success')}, 消息: {message.get('message', '无')}",
+                    logger(f"Game over: Success: {message.get('success')}, Message: {message.get('message', 'None')}",
                            'success' if message.get('success') else 'error')
                     return
 
             except Exception as e:
-                logger(f"处理消息时出错: {e}", "error")
+                logger(f"Error processing message: {e}", "error")
         elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
             break
 
@@ -116,5 +116,4 @@ async def fishing(token, type='1', proxy=None):
                 for task in pending:
                     task.cancel()
     except Exception as e:
-        logger(f"WebSocket 连接或执行失败: {e}", "error")
-
+        logger(f"WebSocket connection or execution failed: {e}", "error")
