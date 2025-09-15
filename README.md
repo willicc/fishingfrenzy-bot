@@ -1,4 +1,4 @@
-# 🎣 Fishing Frenzy Automation Toolkit 🤖
+# 🎣 Fishing Frenzy Automation Toolkit | Thanks To Bingo Crypto 🤖
 
 This is an automation toolkit designed specifically for the Fishing Frenzy web game, containing two core scripts:
 
