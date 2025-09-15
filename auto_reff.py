@@ -255,62 +255,64 @@ def generate_wallets():
     return code_reff, wallet_data
 
 
-async def worker(wallet, proxy, code_reff, semaphore):
+async def worker(wallet, proxy, code_reff):
     """
     Process a single wallet: authenticate -> login -> apply referral -> retrieve own referral code.
     Returns (wallet_with_reff, access_token) on success or (wallet, None) on failure.
+    Note: semaphore and delay between actions have been removed as requested.
     """
-    async with semaphore:
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                logger(f"Processing wallet {wallet['address']} (attempt {attempt + 1}/{max_retries})", 'info')
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            logger(f"Processing wallet {wallet['address']} (attempt {attempt + 1}/{max_retries})", 'info')
 
-                logger("Step 1/4: Authenticating wallet...", 'info')
-                privy_token = await authenticate(wallet['privateKey'], proxy)
-                logger("Authentication successful.", 'success')
+            logger("Step 1/3: Authenticating wallet...", 'info')
+            privy_token = await authenticate(wallet['privateKey'], proxy)
+            logger("Authentication successful.", 'success')
 
-                logger("Step 2/4: Logging into game...", 'info')
-                access_token = await login(privy_token, proxy)
-                logger("Login successful.", 'success')
+            logger("Step 2/3: Logging into game...", 'info')
+            access_token = await login(privy_token, proxy)
+            logger("Login successful.", 'success')
 
-                logger("Step 3/4: Applying referral code...", 'info')
-                await verify_reff(access_token, code_reff, proxy)
+            logger("Step 3/3: Applying referral code...", 'info')
+            await verify_reff(access_token, code_reff, proxy)
 
-                logger("Step 4/4: Retrieving account info to get referral code...", 'info')
-                account_info = await get_account_info(access_token, proxy)
-                # Try multiple possible keys where reference code might be stored
-                reference_code = account_info.get('referenceCode') or account_info.get('refCode') or \
-                                 (account_info.get('refCode', {}) if isinstance(account_info.get('refCode', {}), str) else None)
-                # fallback to nested 'refCode' object with 'code' field
+            logger("Retrieving account info to get referral code...", 'info')
+            account_info = await get_account_info(access_token, proxy)
+
+            # Try multiple possible keys where reference code might be stored
+            reference_code = None
+            if isinstance(account_info, dict):
+                # direct keys
+                for key in ('referenceCode', 'reference', 'ref', 'refCode', 'ref_code'):
+                    val = account_info.get(key)
+                    if val:
+                        if isinstance(val, dict):
+                            reference_code = val.get('code') or val.get('referenceCode') or val.get('reference') or None
+                        elif isinstance(val, str):
+                            reference_code = val
+                        if reference_code:
+                            break
+                # deeper fallback
                 if not reference_code:
-                    ref_obj = account_info.get('refCode') or account_info.get('refCode', {})
+                    ref_obj = account_info.get('refCode') or account_info.get('ref', {})
                     if isinstance(ref_obj, dict):
-                        reference_code = ref_obj.get('code') or ref_obj.get('referenceCode')
-                if not reference_code:
-                    # try 'refCode' key inside 'refCode' or 'refCode' object from preview 'refCode': {code: ...}
-                    ref_obj_alt = account_info.get('refCode') or account_info.get('refCode', {})
-                    if isinstance(ref_obj_alt, dict):
-                        reference_code = ref_obj_alt.get('code')
+                        reference_code = ref_obj.get('code') or ref_obj.get('referenceCode') or None
 
-                # final fallback: check 'ref' or 'reference' keys
-                if not reference_code:
-                    reference_code = account_info.get('ref') or account_info.get('reference')
+            wallet['reff'] = reference_code or None
+            logger(f"Wallet {wallet['address']} processed successfully. Own referral: {wallet.get('reff')}", 'success')
 
-                wallet['reff'] = reference_code or None
-                logger(f"Wallet {wallet['address']} processed successfully. Own referral: {wallet.get('reff')}", 'success')
+            return wallet, access_token
 
-                # Return wallet with reff and the access token
-                return wallet, access_token
-
-            except Exception as e:
-                logger(f"Error processing wallet {wallet['address']} (attempt {attempt + 1}/{max_retries}): {e}", 'error')
-                if attempt < max_retries - 1:
-                    logger("Retrying after 5 seconds...", 'info')
-                    await asyncio.sleep(5)
-                else:
-                    logger(f"Wallet {wallet['address']} failed after {max_retries} attempts.", 'error')
-        return wallet, None
+        except Exception as e:
+            logger(f"Error processing wallet {wallet['address']} (attempt {attempt + 1}/{max_retries}): {e}", 'error')
+            if attempt < max_retries - 1:
+                wait_time = 5
+                logger(f"Retrying after {wait_time} seconds...", 'info')
+                await asyncio.sleep(wait_time)
+            else:
+                logger(f"Wallet {wallet['address']} failed after {max_retries} attempts.", 'error')
+    return wallet, None
 
 
 async def process_wallets(code_reff, wallets):
@@ -340,18 +342,36 @@ async def process_wallets(code_reff, wallets):
         logger("No proxies found; running without proxy.", 'info')
         use_proxy = False
 
+    # Ask for delay between wallets (kept as requested)
+    try:
+        delay_between_wallets = int(input(Fore.YELLOW + "Enter delay between wallets (seconds): " + Style.RESET_ALL))
+        if delay_between_wallets < 0:
+            delay_between_wallets = 0
+            logger("Delay cannot be negative. Setting to 0.", 'warn')
+    except ValueError:
+        delay_between_wallets = 0
+        logger("Invalid input. Setting delay to 0.", 'warn')
+
     proxy_index = 0
     tasks = []
-    concurrency_limit = 10
-    semaphore = asyncio.Semaphore(concurrency_limit)
 
-    for wallet in wallets:
+    for index, wallet in enumerate(wallets):
         if use_proxy:
             proxy, proxy_index = get_next_proxy(proxies, proxy_index)
         else:
             proxy = None
-        tasks.append(asyncio.create_task(worker(wallet, proxy, code_reff, semaphore)))
 
+        # create task for each wallet (no semaphore/concurrency limit)
+        tasks.append(asyncio.create_task(worker(wallet, proxy, code_reff)))
+
+        # Add delay between wallet creation if not the last wallet
+        if index < len(wallets) - 1 and delay_between_wallets > 0:
+            logger(f"Waiting {delay_between_wallets} seconds before next wallet...", 'info')
+            for i in range(delay_between_wallets, 0, -1):
+                logger(f"Next wallet in {i} seconds...", 'info')
+                await asyncio.sleep(1)
+
+    # Wait for all tasks to complete
     results = await asyncio.gather(*tasks)
 
     successful_wallets = []
