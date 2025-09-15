@@ -24,7 +24,10 @@ def logger(message, level='info', data=None):
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     log_message = f"{Style.BRIGHT}[{timestamp}]{color_map.get(level, Fore.WHITE)} {message}{Style.RESET_ALL}"
     if data:
-        log_message += f"\n{json.dumps(data, indent=2, ensure_ascii=False)}"
+        try:
+            log_message += f"\n{json.dumps(data, indent=2, ensure_ascii=False)}"
+        except Exception:
+            log_message += f"\n{data}"
     print(log_message)
 
 
@@ -33,10 +36,10 @@ def load_private_keys(filename):
         with open(filename, 'r', encoding='utf-8') as f:
             return json.load(f)
     except FileNotFoundError:
-        logger(f"Error: file dompet '{filename}' tidak ditemukan.", 'error')
+        logger(f"Error: wallet file '{filename}' not found.", 'error')
         return []
     except json.JSONDecodeError:
-        logger(f"Error: gagal menguraikan file dompet '{filename}'. Pastikan format JSON valid.", 'error')
+        logger(f"Error: failed to parse wallet file '{filename}'. Ensure valid JSON format.", 'error')
         return []
 
 
@@ -45,12 +48,12 @@ def load_proxies_from_file(filename):
         with open(filename, 'r', encoding='utf-8') as f:
             proxies = [line.strip() for line in f if line.strip()]
         if not proxies:
-            logger(f"Peringatan: file proxy '{filename}' kosong.", 'info')
+            logger(f"Warning: proxy file '{filename}' is empty.", 'info')
         else:
-            logger(f"Jumlah proxy yang dimuat dari {filename}: {len(proxies)}", 'info')
+            logger(f"Loaded {len(proxies)} proxies from {filename}", 'info')
         return proxies
     except FileNotFoundError:
-        logger(f"Peringatan: file proxy '{filename}' tidak ditemukan. Menjalankan tanpa proxy.", 'info')
+        logger(f"Warning: proxy file '{filename}' not found. Running without proxy.", 'info')
         return []
 
 
@@ -61,22 +64,30 @@ def save_tokens_to_file(tokens, path):
         with open(path, 'a', encoding='utf-8') as f:
             for token in tokens:
                 f.write(token + '\n')
-        logger(f"Berhasil menyimpan {len(tokens)} token ke {path}", 'success')
+        logger(f"Saved {len(tokens)} tokens to {path}", 'success')
     except IOError as e:
-        logger(f'Error saat menyimpan token: {e}', 'error')
+        logger(f'Error saving tokens: {e}', 'error')
 
 
 def save_wallets_to_file(wallets, path):
     """
-    Menyimpan daftar wallet (array of {address, privateKey}) ke walletX.json.
-    Akan menimpa file lama (menyimpan hanya wallet yang berhasil).
+    Save wallets to walletX.json using the order: address, privateKey, reff.
+    Overwrites the file with only the successfully processed wallets.
     """
     try:
+        # Build ordered list to ensure field order in JSON
+        formatted_wallets = []
+        for w in wallets:
+            formatted_wallets.append({
+                'address': w.get('address'),
+                'privateKey': w.get('privateKey'),
+                'reff': w.get('reff')  # may be None
+            })
         with open(path, 'w', encoding='utf-8') as f:
-            json.dump(wallets, f, indent=2)
-        logger(f"Berhasil menyimpan {len(wallets)} wallet berhasil ke {path}", 'success')
+            json.dump(formatted_wallets, f, indent=2)
+        logger(f"Saved {len(formatted_wallets)} successful wallets to {path}", 'success')
     except IOError as e:
-        logger(f'Error saat menyimpan wallet ke {path}: {e}', 'error')
+        logger(f'Error saving wallets to {path}: {e}', 'error')
 
 
 def get_next_proxy(proxies, current_index):
@@ -105,19 +116,19 @@ async def send_sign_in_request(wallet_address, proxy):
     response.raise_for_status()
     result = response.json()
     if not result.get('nonce'):
-        raise Exception('Tidak menerima nonce dari endpoint sign-in.')
+        raise Exception('Did not receive nonce from sign-in endpoint.')
     return result
 
 
 async def generate_signature(wallet):
-    # Tetap gunakan None untuk proxy pada step ini sesuai implementasi awal
+    # Keep proxy None here to match earlier approach (signing does not require proxy)
     data = await send_sign_in_request(wallet.address, None)
     now_utc = datetime.now(timezone.utc)
     issued_at = now_utc.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
     siwe_message = SiweMessage(
         domain="fishingfrenzy.co",
         address=wallet.address,
-        statement="Dengan menandatangani, Anda membuktikan bahwa Anda memiliki wallet ini dan login. Ini tidak memicu transaksi atau biaya.",
+        statement="By signing you prove you own this wallet and login. This does not trigger any transaction or fee.",
         uri="https://fishingfrenzy.co",
         version="1",
         chain_id=2020,
@@ -157,7 +168,7 @@ async def authenticate(private_key, proxy):
     response.raise_for_status()
     result = response.json()
     if not result.get('token'):
-        raise Exception('Autentikasi gagal, tidak menerima token.')
+        raise Exception('Authentication failed, did not receive token.')
     return result['token']
 
 
@@ -179,7 +190,7 @@ async def login(privy_token, proxy):
     response.raise_for_status()
     result = response.json()
     if not result.get('tokens', {}).get('access', {}).get('token'):
-        raise Exception('Login gagal, tidak menerima access token.')
+        raise Exception('Login failed, did not receive access token.')
     return result['tokens']['access']['token']
 
 
@@ -194,101 +205,139 @@ async def verify_reff(access_token, code_reff, proxy):
     response = await loop.run_in_executor(None, lambda: requests.post(url, headers=headers, json={}, proxies=proxy,
                                                                       timeout=10))
     response.raise_for_status()
-    logger("Berhasil menerapkan kode referral.", 'success')
+    logger("Referral code applied successfully.", 'success')
+    return response.json()
+
+
+async def get_account_info(access_token, proxy):
+    """
+    GET /v1/users/me to retrieve user's info, including referenceCode.
+    """
+    url = 'https://api.fishingfrenzy.co/v1/users/me'
+    headers = {
+        'Content-Type': 'application/json',
+        'origin': 'https://fishingfrenzy.co',
+        'authorization': f'Bearer {access_token}'
+    }
+    loop = asyncio.get_event_loop()
+    response = await loop.run_in_executor(None, lambda: requests.get(url, headers=headers, proxies=proxy, timeout=10))
+    response.raise_for_status()
     return response.json()
 
 
 def generate_wallets():
     """
-    Menghasilkan wallet baru dan mengembalikan tuple (code_reff, wallet_data)
-    Tidak langsung menyimpan walletX.json — hanya mengembalikan data untuk diproses.
+    Generate new wallets and return (code_reff, wallet_data).
+    Wallets are returned as list of dicts {address, privateKey}.
     """
     wallet_data = []
     try:
-        code_reff = input(Fore.YELLOW + "Masukkan kode referral Anda: " + Style.RESET_ALL)
+        code_reff = input(Fore.YELLOW + "Enter your referral code: " + Style.RESET_ALL)
         if not code_reff:
-            logger("Kode referral tidak boleh kosong.", "error")
+            logger("Referral code cannot be empty.", "error")
             return None, []
-        number_wallet_str = input(Fore.YELLOW + 'Masukkan jumlah wallet referral yang ingin digenerate: ' + Style.RESET_ALL)
+        number_wallet_str = input(Fore.YELLOW + 'Enter number of referral wallets to generate: ' + Style.RESET_ALL)
         number_wallet = int(number_wallet_str)
         if number_wallet <= 0:
-            logger("Jumlah harus lebih besar dari 0.", 'error')
+            logger("Number must be greater than 0.", 'error')
             return None, []
     except ValueError:
-        logger("Masukkan angka yang valid.", 'error')
+        logger("Enter a valid number.", 'error')
         return None, []
-    logger(f"Menyiapkan pembuatan {number_wallet} wallet...", 'info')
+    logger(f"Preparing to create {number_wallet} wallets...", 'info')
     for _ in range(number_wallet):
         account = Account.create()
         wallet_data.append({
             'address': account.address,
             'privateKey': account.key.hex()
         })
-    logger(f"Pembuatan wallet selesai, {number_wallet} wallet telah dibuat (belum disimpan ke file).", 'success')
+    logger(f"Wallet creation complete: {number_wallet} wallets created (not yet saved).", 'success')
     return code_reff, wallet_data
 
 
 async def worker(wallet, proxy, code_reff, semaphore):
     """
-    Memproses satu wallet: autentikasi -> login -> verifikasi referral.
-    Mengembalikan tuple (wallet, access_token) jika sukses, atau (wallet, None) jika gagal.
+    Process a single wallet: authenticate -> login -> apply referral -> retrieve own referral code.
+    Returns (wallet_with_reff, access_token) on success or (wallet, None) on failure.
     """
     async with semaphore:
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                logger(f"Memulai proses wallet {wallet['address']} (percobaan {attempt + 1}/{max_retries})", 'info')
+                logger(f"Processing wallet {wallet['address']} (attempt {attempt + 1}/{max_retries})", 'info')
 
-                logger("Langkah 1/3: Mengautentikasi wallet...", 'info')
+                logger("Step 1/4: Authenticating wallet...", 'info')
                 privy_token = await authenticate(wallet['privateKey'], proxy)
-                logger("Autentikasi berhasil.", 'success')
+                logger("Authentication successful.", 'success')
 
-                logger("Langkah 2/3: Melakukan login game...", 'info')
+                logger("Step 2/4: Logging into game...", 'info')
                 access_token = await login(privy_token, proxy)
-                logger("Login berhasil.", 'success')
+                logger("Login successful.", 'success')
 
-                logger("Langkah 3/3: Menerapkan kode referral...", 'info')
+                logger("Step 3/4: Applying referral code...", 'info')
                 await verify_reff(access_token, code_reff, proxy)
 
-                logger(f"Wallet {wallet['address']} berhasil diproses.", 'success')
-                # Kembalikan wallet dan token yang berhasil
+                logger("Step 4/4: Retrieving account info to get referral code...", 'info')
+                account_info = await get_account_info(access_token, proxy)
+                # Try multiple possible keys where reference code might be stored
+                reference_code = account_info.get('referenceCode') or account_info.get('refCode') or \
+                                 (account_info.get('refCode', {}) if isinstance(account_info.get('refCode', {}), str) else None)
+                # fallback to nested 'refCode' object with 'code' field
+                if not reference_code:
+                    ref_obj = account_info.get('refCode') or account_info.get('refCode', {})
+                    if isinstance(ref_obj, dict):
+                        reference_code = ref_obj.get('code') or ref_obj.get('referenceCode')
+                if not reference_code:
+                    # try 'refCode' key inside 'refCode' or 'refCode' object from preview 'refCode': {code: ...}
+                    ref_obj_alt = account_info.get('refCode') or account_info.get('refCode', {})
+                    if isinstance(ref_obj_alt, dict):
+                        reference_code = ref_obj_alt.get('code')
+
+                # final fallback: check 'ref' or 'reference' keys
+                if not reference_code:
+                    reference_code = account_info.get('ref') or account_info.get('reference')
+
+                wallet['reff'] = reference_code or None
+                logger(f"Wallet {wallet['address']} processed successfully. Own referral: {wallet.get('reff')}", 'success')
+
+                # Return wallet with reff and the access token
                 return wallet, access_token
+
             except Exception as e:
-                logger(f"Error saat memproses wallet {wallet['address']} (percobaan {attempt + 1}/{max_retries}): {e}", 'error')
+                logger(f"Error processing wallet {wallet['address']} (attempt {attempt + 1}/{max_retries}): {e}", 'error')
                 if attempt < max_retries - 1:
-                    logger("Akan mencoba lagi setelah 5 detik...", 'info')
+                    logger("Retrying after 5 seconds...", 'info')
                     await asyncio.sleep(5)
                 else:
-                    logger(f"Wallet {wallet['address']} gagal setelah {max_retries} percobaan.", 'error')
-        # Gagal setelah retries
+                    logger(f"Wallet {wallet['address']} failed after {max_retries} attempts.", 'error')
         return wallet, None
 
 
 async def process_wallets(code_reff, wallets):
     """
-    Memproses daftar wallet yang diberikan.
-    Hanya wallet yang berhasil (menghasilkan access_token) akan disimpan ke walletX.json.
-    Token yang berhasil disimpan ke tokens.txt.
+    Process provided wallet list.
+    Only wallets that succeed (produce access_token and have been processed) will be saved to walletX.json.
+    Successful tokens will be appended to tokens.txt.
     """
     if not wallets:
-        logger("Tidak ada wallet untuk diproses (daftar kosong).", 'error')
+        logger("No wallets to process (empty list).", 'error')
         return
 
     proxies = load_proxies_from_file('proxies.txt')
 
-    # Pilihan penggunaan proxy: jika tidak ada proxy, otomatis jalankan tanpa proxy.
+    # Ask user whether to use proxies if any are loaded
     use_proxy = False
     if proxies:
         while True:
-            choice = input(Fore.YELLOW + "Apakah ingin menggunakan proxy dari proxies.txt? [y/n]: " + Style.RESET_ALL).strip().lower()
+            choice = input(Fore.YELLOW + "Use proxies from proxies.txt? [y/n]: " + Style.RESET_ALL).strip().lower()
             if choice in ('y', 'n'):
                 use_proxy = (choice == 'y')
                 break
             else:
-                logger("Masukkan 'y' (ya) atau 'n' (tidak).", 'error')
-        logger(f"Menjalankan dengan proxy: {use_proxy}", 'info')
+                logger("Enter 'y' or 'n'.", 'error')
+        logger(f"Running with proxies: {use_proxy}", 'info')
     else:
-        logger("Tidak ada proxy; menjalankan tanpa proxy.", 'info')
+        logger("No proxies found; running without proxy.", 'info')
         use_proxy = False
 
     proxy_index = 0
@@ -296,7 +345,6 @@ async def process_wallets(code_reff, wallets):
     concurrency_limit = 10
     semaphore = asyncio.Semaphore(concurrency_limit)
 
-    # Proses semua wallet sekaligus (dengan concurrency limit)
     for wallet in wallets:
         if use_proxy:
             proxy, proxy_index = get_next_proxy(proxies, proxy_index)
@@ -306,29 +354,27 @@ async def process_wallets(code_reff, wallets):
 
     results = await asyncio.gather(*tasks)
 
-    # Kumpulkan wallet yang sukses dan tokennya
     successful_wallets = []
     successful_tokens = []
     failed_count = 0
     for wallet, token in results:
         if token:
+            # ensure wallet has reff (may be None if retrieval failed)
             successful_wallets.append(wallet)
             successful_tokens.append(token)
         else:
             failed_count += 1
 
-    # Simpan token yang berhasil
     if successful_tokens:
         save_tokens_to_file(successful_tokens, 'tokens.txt')
 
-    # Simpan ONLY wallet yang berhasil ke walletX.json (timpa file lama)
     if successful_wallets:
+        # Save only successful wallets, ensuring field order address, privateKey, reff
         save_wallets_to_file(successful_wallets, 'walletX.json')
     else:
-        # Jika tidak ada yang sukses, hapus file walletX.json (opsional) atau beri peringatan.
-        logger("Tidak ada wallet yang berhasil — file walletX.json tidak akan diperbarui.", 'warn')
+        logger("No wallets succeeded — walletX.json will not be updated.", 'warn')
 
-    logger(f"Proses selesai: {len(successful_wallets)} sukses, {failed_count} gagal.", 'info')
+    logger(f"Process complete: {len(successful_wallets)} succeeded, {failed_count} failed.", 'info')
 
 
 if __name__ == '__main__':
