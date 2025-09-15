@@ -5,83 +5,83 @@ from utils import logger, load_tokens_from_file, load_proxies_from_file, get_nex
 import api
 import game
 
-# 解决 aiodns/aiohttp 在 Windows 上的事件循环兼容性问题
+# Perbaikan kompatibilitas loop event aiodns/aiohttp pada Windows
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 
 async def worker(token, proxy, fishing_type, semaphore):
     """
-    单个账户的工作单元，包含了完整的任务决策逻辑。
+    Unit kerja untuk satu akun, berisi logika keputusan dan eksekusi tugas.
     """
     async with semaphore:
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                logger(f"开始处理 Token: ...{token[-4:]} (尝试 {attempt + 1}/{max_retries})", 'info')
+                logger(f"Memulai proses Token: ...{token[-4:]} (percobaan {attempt + 1}/{max_retries})", 'info')
 
-                # 1. 获取用户信息
+                # 1. Ambil informasi pengguna
                 profile = await api.get_user_info(token, proxy)
                 if not profile:
-                    raise Exception("获取用户信息失败")
+                    raise Exception("Gagal mengambil informasi pengguna")
 
                 user_id = profile.get('id')
                 logger(
-                    f"账户: {user_id[-6:]} | 等级: {profile.get('level')} | 经验值: {profile.get('exp')} | 金币: {profile.get('gold')} | 能量: {profile.get('energy')}",
+                    f"Akun: {user_id[-6:]} | Level: {profile.get('level')} | Exp: {profile.get('exp')} | Koin: {profile.get('gold')} | Energi: {profile.get('energy')}",
                     'info')
 
-                # 2. 决策树：按优先级执行任务
+                # 2. Pohon keputusan: jalankan tugas berdasarkan prioritas
                 if not profile.get('isCompleteTutorial'):
-                    logger(f"账户 {user_id[-6:]} | 检测到未完成新手教程，正在自动完成...", 'info')
+                    logger(f"Akun {user_id[-6:]} | Terdeteksi belum menyelesaikan tutorial, sedang menyelesaikan otomatis...", 'info')
                     await api.complete_tutorial(token, proxy, user_id)
 
                 elif not profile.get('isClaimedDailyReward'):
-                    logger(f"账户 {user_id[-6:]} | 开始每日签到...", 'info')
+                    logger(f"Akun {user_id[-6:]} | Memulai klaim hadiah harian...", 'info')
                     await api.claim_daily_reward(token, proxy)
-                    logger(f"账户 {user_id[-6:]} | 检查可领取的社交任务...", 'info')
+                    logger(f"Akun {user_id[-6:]} | Memeriksa tugas sosial yang bisa diklaim...", 'info')
                     quests = await api.get_social_quests(token, proxy)
                     if quests:
                         unclaimed_quests = [q['id'] for q in quests if q.get('status') == "UnClaimed"]
                         for quest_id in unclaimed_quests:
                             if quest_id not in ['670f3bb8193d51c460247600', '670f3c40193d51c460247623',
                                                 '670f3c76193d51c46024762c']:
-                                logger(f"账户 {user_id[-6:]} | 正在领取任务 ID: {quest_id}", 'info')
+                                logger(f"Akun {user_id[-6:]} | Mengklaim tugas ID: {quest_id}", 'info')
                                 await api.verify_quest(token, quest_id, proxy)
 
                 elif profile.get('gold', 0) > 1500:
                     item_id = '66b1f692aaa0b594511c2db2'
-                    logger(f"账户 {user_id[-6:]} | 金币充足，尝试购买并使用经验卷轴...", 'info')
+                    logger(f"Akun {user_id[-6:]} | Koin mencukupi, mencoba membeli dan memakai gulungan EXP...", 'info')
                     buy_result = await api.buy_fishing(token, proxy, item_id, user_id)
                     if buy_result:
-                        logger(f"账户 {user_id[-6:]} | 购买成功，正在使用...", 'info')
+                        logger(f"Akun {user_id[-6:]} | Pembelian berhasil, sedang digunakan...", 'info')
                         await api.use_item(token, proxy, item_id, user_id)
 
                 else:
                     energy_required = {'1': 1, '2': 2, '3': 3}
                     if profile.get('energy', 0) >= energy_required.get(fishing_type, 1):
-                        logger(f"账户 {user_id[-6:]} | 能量充足，开始钓鱼...", 'info')
+                        logger(f"Akun {user_id[-6:]} | Energi cukup, memulai memancing...", 'info')
                         await game.fishing(token, fishing_type, proxy)
                     else:
-                        logger(f"账户 {user_id[-6:]} | 能量不足，检查背包...", 'warn')
+                        logger(f"Akun {user_id[-6:]} | Energi tidak cukup, memeriksa inventaris...", 'warn')
                         inventory = await api.get_inventory(token, proxy)
                         items = inventory.get('list_item_info', [])
                         if items:
                             item_to_use = items[0]
-                            logger(f"账户 {user_id[-6:]} | 找到物品 '{item_to_use['name']}'，正在使用...", 'info')
+                            logger(f"Akun {user_id[-6:]} | Ditemukan item '{item_to_use['name']}', sedang digunakan...", 'info')
                             await api.use_item(token, proxy, item_to_use['id'], user_id)
                         else:
-                            logger(f"账户 {user_id[-6:]} | 背包为空，无法恢复能量。", 'warn')
+                            logger(f"Akun {user_id[-6:]} | Inventaris kosong, tidak ada item untuk mengembalikan energi.", 'warn')
 
-                logger(f"账户 ...{token[-4:]} 处理成功。", 'success')
+                logger(f"Akun ...{token[-4:]} berhasil diproses.", 'success')
                 return
 
             except Exception as e:
-                logger(f"处理 Token ...{token[-4:]} 时出错: {e}", 'error')
+                logger(f"Error saat memproses Token ...{token[-4:]}: {e}", 'error')
                 if attempt < max_retries - 1:
-                    logger(f"将在5秒后重试...", 'info')
+                    logger("Akan mencoba ulang setelah 5 detik...", 'info')
                     await asyncio.sleep(5)
                 else:
-                    logger(f"Token ...{token[-4:]} 在 {max_retries} 次尝试后最终失败。", 'error')
+                    logger(f"Token ...{token[-4:]} gagal setelah {max_retries} percobaan.", 'error')
 
 
 async def main():
@@ -89,23 +89,23 @@ async def main():
     proxies = load_proxies_from_file('proxies.txt')
 
     try:
-        fishing_type = input('请选择钓鱼类型\n1. 短距离\n2. 中距离\n3. 长距离\n请输入您的选择 (1, 2, 3): ')
+        fishing_type = input('Pilih tipe memancing\n1. Jarak Dekat\n2. Jarak Menengah\n3. Jarak Jauh\nMasukkan pilihan Anda (1, 2, 3): ')
         if fishing_type not in ['1', '2', '3']:
-            logger("无效的选择，请输入 1, 2, 或 3。", "error")
+            logger("Pilihan tidak valid, masukkan 1, 2, atau 3.", "error")
             return
     except KeyboardInterrupt:
-        logger("用户中断了输入。", "info")
+        logger("Input dibatalkan oleh pengguna.", "info")
         return
 
     if not tokens:
-        logger("tokens.txt 为空或不存在，程序退出。", "error")
+        logger("tokens.txt kosong atau tidak ditemukan, program keluar.", "error")
         return
     if not proxies:
-        logger("proxies.txt 为空或不存在，程序将不使用代理运行。", "warn")
+        logger("proxies.txt kosong atau tidak ditemukan, program akan berjalan tanpa proxy.", "warn")
 
     proxy_index = 0
 
-    # 定义每个账户任务启动之间的随机延迟范围（秒）
+    # Rentang delay acak antar akun (detik)
     INTER_ACCOUNT_DELAY_MIN = 1
     INTER_ACCOUNT_DELAY_MAX = 3
 
@@ -114,27 +114,25 @@ async def main():
         concurrency_limit = 10
         semaphore = asyncio.Semaphore(concurrency_limit)
 
-        logger(f"开始新一轮处理，共 {len(tokens)} 个账户。", 'info')
+        logger(f"Memulai ronde baru, total {len(tokens)} akun.", 'info')
 
         for token in tokens:
             proxy = None
             if proxies:
                 proxy, proxy_index = get_next_proxy(proxies, proxy_index)
 
-            # 通过 asyncio.create_task 立即调度 worker 协程
-            # 这确保了任务在创建后就开始运行，而不是等待 gather
+            # Menjadwalkan worker segera agar tugas langsung berjalan
             task = asyncio.create_task(worker(token, proxy, fishing_type, semaphore))
             tasks.append(task)
 
-            # 在启动下一个账户任务前，加入一个随机的短暂延迟
-            # 这样可以错开每个任务的启动时间，避免瞬时并发过高
+            # Delay acak sebelum memulai akun berikutnya untuk meratakan beban
             delay = random.uniform(INTER_ACCOUNT_DELAY_MIN, INTER_ACCOUNT_DELAY_MAX)
-            logger(f"等待 {delay:.2f} 秒后启动下一个账户任务...", 'debug')
+            logger(f"Menunggu {delay:.2f} detik sebelum memulai tugas akun berikutnya...", 'debug')
             await asyncio.sleep(delay)
 
         await asyncio.gather(*tasks)
 
-        logger(f'所有账户处理完毕，等待 15 秒后开始下一轮...', 'info')
+        logger('Semua akun telah diproses, menunggu 15 detik sebelum ronde berikutnya...', 'info')
         await asyncio.sleep(15)
 
 
@@ -142,5 +140,4 @@ if __name__ == '__main__':
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        logger("程序被用户手动中断。", "info")
-
+        logger("Program dihentikan oleh pengguna.", "info")
