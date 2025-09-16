@@ -40,7 +40,7 @@ This script is designed for users who need to create many new accounts and bind 
 **1. Clone the repository**
 
 ```bash
-git clone https://github.com/BingoCrypto/fishingfrenzy-bot
+git clone https://github.com/willicc/fishingfrenzy-bot
 cd fishingfrenzy-bot
 ```
 
